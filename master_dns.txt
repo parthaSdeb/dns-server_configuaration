@@ -1,0 +1,235 @@
+--------------------------------------------------------------------------------------------------------------------------
+---------------------------------- Domain Name System Configuaration -----------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+
+In this document i would liek to explain the method of configuring a dns server (master). I will explain the steps by step process.
+
+
+Prerequisites:
+-------------
+For the purpose of configuring dns server we wii need a at least two machine (it can be virtual or physical machines)
+
+machine1 	server.example.com	->	192.168.122.10
+machine2	desktop.examlpe.com	->	192.168.122.22
+
+both the machine uses centos7/rhel7 based.
+
+
+STEP-1:	Installing Package
+----------------------------
+first of all we will install the bind package, whch is necessary for dns configuaration.
+
+yum install bind* -y
+
+after installation we will restart and enable the service.
+
+systemctl restart named
+systemctl enable named
+
+
+
+STEP-2:	Assigning static ip
+----------------------------
+In this step i will configure the network and assign a static ip address.
+
+Vim /etc/sysconfig/network-script/ifcfg-ens3
+
+than configure the network.
+
+
+TYPE="Ethernet"
+PROXY_METHOD="none"
+BROWSER_ONLY="no"
+BOOTPROTO="static"
+DEFROUTE="yes"
+IPV4_FAILURE_FATAL="no"
+IPV6INIT="yes"
+IPV6_AUTOCONF="yes"
+IPV6_DEFROUTE="yes"
+IPV6_FAILURE_FATAL="no"
+IPV6_ADDR_GEN_MODE="stable-privacy"
+NAME="ens3"
+UUID="de1af78f-7c7f-4adf-960c-ea9d0bda3111"
+DEVICE="ens3"
+ONBOOT="yes"
+IPADDR=192.168.122.10
+NETMASK=255.255.255.0
+GATEWAY=192.168.122.1
+
+than restart the network
+
+systemctl restart NetworkManager
+
+
+STEP-3:	Assigning FQDN
+-----------------------
+In this step we will assign a fully qualified domain name (FQDN)
+
+vim /etc/sysconfig/network
+
+NETWORKING=yes
+HOSTNAME=server.example.com
+
+
+STEP-4:	Hostname Cofiguaration
+-------------------------------
+
+In this step I will configure the hostname
+
+vim /etc/hosts
+
+192.168.122.10		server.example.com
+
+
+
+STEP-5: Configuring the resolver
+--------------------------------
+
+this step have to be performed for both server.example.com and desktop.example.com  machine
+
+vim /etc/resolve.conf
+
+search 		example.com
+nameserver	192.168.122.10
+
+
+STEP-6: Configuring the named.conf file
+---------------------------------------
+
+In this stage we will configure the named.conf file. The named.conf file should be configured like this. ( listen-on port 53 and allow-query  option should be changed)
+
+options {
+	listen-on port 53 { 127.0.0.1;192.168.122.10; };
+	#listen-on-v6 port 53 { ::1; };
+	directory 	"/var/named";
+	dump-file 	"/var/named/data/cache_dump.db";
+	statistics-file "/var/named/data/named_stats.txt";
+	memstatistics-file "/var/named/data/named_mem_stats.txt";
+	recursing-file  "/var/named/data/named.recursing";
+	secroots-file   "/var/named/data/named.secroots";
+	allow-query     { localhost;any; };
+
+
+
+STEP-7: Configuring the /etc/named.rfc1912.zones
+-------------------------------------------------
+
+In this step we will have to create two zones such as (1) forward zone and (2) reverse zones. 
+
+forward zone:
+forward zone will help to resolve the dns query when it will be searched by domain name.
+
+reverse zone:
+reverse zone will help to resolve the dns query when it will be searched by ip address instead of domain name.
+
+
+###########################################
+#forward zone for example.com domain
+zone "example.com" IN {
+        type master;
+        file "forward.zone";
+        allow-update { none; };
+};
+
+#reserse zone for example.com domain
+zone "122.168.192.in-addr.arpa" IN {
+        type master;
+        file "reverse.zone";
+        allow-update { none; };
+};
+###########################################
+
+
+STEP-8: Creating the forward and reverse zone in /var/named diretory
+--------------------------------------------------------------------
+
+In this step we will create forward.zone and reverse.zone files in /var/named directory which we had previously mentioned in the  "/etc/named.rfc1912.zones" file while creating the zones for example.com domain.
+Here we can use named.localhost file as a template to create  forward.zone and reverse.zone file.
+
+----------------------------------------------------------------
+vim /var/named/forward.zone
+
+
+$TTL 1D
+@	IN SOA	server.example.com. root.server.example.com. (
+					0	; serial
+					1D	; refresh
+					1H	; retry
+					1W	; expire
+					3H )	; minimum
+	IN NS	server.example.com.
+server	IN A	192.168.122.10
+---------------------------------------------------------------
+
+than 
+
+---------------------------------------------------------------
+vim /var/maned/reverse.zone
+
+$TTL 1D
+@	IN SOA	server.example.com. root.server.example.com. (
+					0	; serial
+					1D	; refresh
+					1H	; retry
+					1W	; expire
+					3H )	; minimum
+	IN NS	server.example.com.
+10	IN PTR	server.example.com.
+---------------------------------------------------------------
+
+
+STEP-9: Change the group ownership to "named"
+---------------------------------------------
+
+In this step we have to change the group ownership of the following files.
+
+chgrp named /etc/named.conf
+chgrp named /var/named/forward.zone
+chgrp named /var/named/reverse.zone
+
+after that, we have to restore the following file and directory with the selinux policy
+
+restorecon -Rv /etc/named.conf
+restorecon -Rv /var/named
+
+
+
+STEP-10: adding the 53/tcp and 53/udp port to firewall
+-------------------------------------------------------
+
+In this step we will add 53/tcp and 53/udp ports to firewall as the bind server uses those ports
+
+firewall-cmd --permanent --add-port=53/tcp
+firewall-cmd --permanent --add-port=53/udp
+
+firewall-cmd --reload
+
+firewall-cmd --list-all 	-> checking
+
+
+STEP-11: restarting the bind server/dns server
+-----------------------------------------------
+
+systemctl restart named
+systemctl enable named
+
+
+STEP-12: Checking wheter the server is properly configured
+-----------------------------------------------------------
+
+from server machine
+--------------------
+type "dig" command in terminal
+
+we can also use nsloop up fpr the purpose of checking
+
+nslookup server.example.com
+
+
+from desktop machine
+--------------------
+type "dig" command in terminal
+
+we can also use nsloop up fpr the purpose of checking
+
+nslookup server.example.com
